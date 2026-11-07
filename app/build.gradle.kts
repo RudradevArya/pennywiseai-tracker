@@ -183,6 +183,7 @@ android {
         abortOnError = false
         checkReleaseBuilds = false
     }
+
 }
 
 kotlin {
