@@ -29,6 +29,11 @@ class IDFCFirstBankParser : BaseIndianBankParser() {
     }
 
     override fun parse(smsBody: String, sender: String, timestamp: Long): ParsedTransaction? {
+        // Check for balance-only messages first (from missed-call banking)
+        if (isBalanceOnlyMessage(smsBody)) {
+            return parseBalanceOnly(smsBody, sender, timestamp)
+        }
+
         // Skip non-transaction messages
         if (!isTransactionMessage(smsBody)) {
             return null
@@ -361,5 +366,58 @@ class IDFCFirstBankParser : BaseIndianBankParser() {
         }
 
         return super.extractReference(message)
+    }
+
+    /**
+     * Detects balance-only messages from missed-call banking.
+     * Format: "Available Balance in A/C XX3333 is Rs.88888 Team IDFC FIRST Bank"
+     */
+    private fun isBalanceOnlyMessage(message: String): Boolean {
+        val lowerMessage = message.lowercase()
+        return lowerMessage.contains("available balance in a/c") &&
+                lowerMessage.contains("idfc") &&
+                !lowerMessage.contains("debited") &&
+                !lowerMessage.contains("credited") &&
+                !lowerMessage.contains("spent")
+    }
+
+    /**
+     * Parses balance-only SMS from missed-call banking.
+     * Returns a BALANCE_UPDATE transaction with zero amount.
+     */
+    private fun parseBalanceOnly(message: String, sender: String, timestamp: Long): ParsedTransaction? {
+        // Pattern: "Available Balance in A/C XX3333 is Rs.88888" or "Available Balance in A/C XX3333 is Rs 88,888.00"
+        val balancePattern = Regex(
+            """Available\s+Balance\s+in\s+A/C\s+([X*x\d]+)\s+is\s+(?:Rs\.?|INR)\s*([0-9,]+(?:\.\d{1,2})?)""",
+            RegexOption.IGNORE_CASE
+        )
+
+        val match = balancePattern.find(message) ?: return null
+
+        val accountNumber = match.groupValues[1]
+        val balanceStr = match.groupValues[2].replace(",", "").replace(" ", "")
+
+        val balance = try {
+            BigDecimal(balanceStr)
+        } catch (e: NumberFormatException) {
+            return null
+        }
+
+        val accountLast4 = extractLast4Digits(accountNumber)
+
+        return ParsedTransaction(
+            amount = BigDecimal.ZERO,
+            type = TransactionType.BALANCE_UPDATE,
+            merchant = "Balance Inquiry",
+            reference = null,
+            accountLast4 = accountLast4,
+            balance = balance,
+            smsBody = message,
+            sender = sender,
+            timestamp = timestamp,
+            bankName = getBankName(),
+            isFromCard = false,
+            currency = "INR"
+        )
     }
 }

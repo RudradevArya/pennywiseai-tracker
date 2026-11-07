@@ -86,6 +86,15 @@ android {
             // Standard flavor includes all architectures (including x86 for emulators)
             buildConfigField("boolean", "IS_FDROID_BUILD", "false")
         }
+        create("dev") {
+            dimension = "version"
+            // Dev flavor for testing new features without overwriting production app.
+            // Uses a distinct application ID so it can be installed alongside PennyWise.
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            // Everything unlocked like F-Droid for testing purposes
+            buildConfigField("boolean", "IS_FDROID_BUILD", "true")
+        }
     }
 
     splits {

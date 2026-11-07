@@ -110,6 +110,11 @@ class SmsTransactionProcessor @Inject constructor(
 
             Log.d(TAG, "Parsed transaction: ${parsedTransaction.amount} from ${parsedTransaction.bankName}")
 
+            // Handle balance-only SMS separately - no transaction, just balance update
+            if (parsedTransaction.type == com.pennywiseai.parser.core.TransactionType.BALANCE_UPDATE) {
+                return processBalanceOnlyUpdate(parsedTransaction)
+            }
+
             // Save the transaction
             return saveParsedTransaction(parsedTransaction, body)
         } catch (e: Exception) {
@@ -467,5 +472,89 @@ class SmsTransactionProcessor @Inject constructor(
 
         accountBalanceRepository.insertBalance(balanceEntity)
         Log.d(TAG, "Saved wallet balance for ${parsedTransaction.bankName}")
+    }
+
+    /**
+     * Processes a balance-only SMS (from missed-call banking) by updating the
+     * account balance without creating a transaction entry.
+     *
+     * Balance-only SMS should:
+     * - Update the correct existing bank+account-suffix balance
+     * - Not create any spending/income transaction entry
+     * - Not overwrite a newer balance with a stale reply
+     * - Preserve the existing account's properties (profile, alias, type)
+     */
+    private suspend fun processBalanceOnlyUpdate(
+        parsedTransaction: ParsedTransaction
+    ): ProcessingResult {
+        val accountLast4 = parsedTransaction.accountLast4
+        if (accountLast4 == null) {
+            Log.w(TAG, "Balance-only SMS has no account number")
+            return ProcessingResult(false, reason = "No account number in balance SMS")
+        }
+
+        val balance = parsedTransaction.balance
+        if (balance == null) {
+            Log.w(TAG, "Balance-only SMS has no balance value")
+            return ProcessingResult(false, reason = "No balance value in balance SMS")
+        }
+
+        val bankName = parsedTransaction.bankName
+
+        // Check if account is ignored
+        if (ignoredAccountsStore.isIgnored(bankName, accountLast4, null)) {
+            return ProcessingResult(
+                success = false,
+                reason = "Account is ignored",
+                intentionallySkipped = true
+            )
+        }
+
+        val existingAccount = accountBalanceRepository.getLatestBalance(bankName, accountLast4)
+
+        // Don't overwrite a newer balance with a stale reply
+        if (existingAccount != null) {
+            val smsTimestamp = LocalDateTime.ofInstant(
+                Instant.ofEpochMilli(parsedTransaction.timestamp),
+                ZoneId.systemDefault()
+            )
+            if (existingAccount.timestamp > smsTimestamp) {
+                Log.d(TAG, "Skipping stale balance update: existing balance is newer")
+                return ProcessingResult(
+                    success = false,
+                    reason = "Existing balance is newer than SMS",
+                    intentionallySkipped = true
+                )
+            }
+        }
+
+        // For accounts that don't exist yet, we still record the balance
+        // This creates the account with the balance from the inquiry
+
+        val timestamp = LocalDateTime.ofInstant(
+            Instant.ofEpochMilli(parsedTransaction.timestamp),
+            ZoneId.systemDefault()
+        )
+
+        accountBalanceRepository.insertBalanceUpdate(
+            bankName = bankName,
+            accountLast4 = accountLast4,
+            balance = balance,
+            timestamp = timestamp,
+            smsSource = parsedTransaction.smsBody.take(500),
+            sourceType = "SMS_BALANCE",
+            currency = parsedTransaction.currency
+        )
+
+        Log.d(TAG, "Updated balance for $bankName **$accountLast4: $balance (balance-only SMS)")
+
+        // Trigger widget refresh since balance changed
+        com.pennywiseai.tracker.widget.WidgetRefresher.refreshTransactionWidgets(appContext)
+
+        return ProcessingResult(
+            success = true,
+            transactionId = null,  // No transaction created
+            reason = "Balance updated without transaction"
+        )
     }
 }

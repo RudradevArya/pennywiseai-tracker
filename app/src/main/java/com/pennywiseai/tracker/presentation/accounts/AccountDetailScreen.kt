@@ -1,8 +1,13 @@
 package com.pennywiseai.tracker.presentation.accounts
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import com.pennywiseai.tracker.utils.AppDates
 
 import com.pennywiseai.tracker.domain.model.icon
+import com.pennywiseai.tracker.domain.model.BalanceRequestConfig
 
 import com.pennywiseai.tracker.R
 import androidx.compose.ui.res.stringResource
@@ -32,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -101,6 +107,13 @@ fun AccountDetailScreen(
         ) {
             // Current Balance Card
             item {
+                val context = LocalContext.current
+                val isCreditCard = uiState.currentBalance?.isCreditCard == true
+                val supportsBalanceRequest = BalanceRequestConfig.supportsBalanceRequest(
+                    uiState.bankName,
+                    isCreditCard
+                )
+                
                 CurrentBalanceCard(
                     balance = uiState.currentBalance?.balance ?: BigDecimal.ZERO,
                     creditLimit = uiState.currentBalance?.creditLimit,
@@ -109,7 +122,25 @@ fun AccountDetailScreen(
                     accountLast4 = uiState.accountLast4,
                     primaryCurrency = uiState.primaryCurrency,
                     billedOutstanding = uiState.billedOutstanding,
-                    unbilledOutstanding = uiState.unbilledOutstanding
+                    unbilledOutstanding = uiState.unbilledOutstanding,
+                    supportsBalanceRequest = supportsBalanceRequest,
+                    onRequestBalance = {
+                        val phoneNumber = BalanceRequestConfig.getBalanceRequestNumber(uiState.bankName)
+                        if (phoneNumber != null) {
+                            val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                                data = Uri.parse("tel:$phoneNumber")
+                            }
+                            try {
+                                context.startActivity(dialIntent)
+                            } catch (e: ActivityNotFoundException) {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.account_detail_no_dialer),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
                 )
             }
 
@@ -274,7 +305,9 @@ private fun CurrentBalanceCard(
     accountLast4: String,
     primaryCurrency: String,
     billedOutstanding: BigDecimal? = null,
-    unbilledOutstanding: BigDecimal? = null
+    unbilledOutstanding: BigDecimal? = null,
+    supportsBalanceRequest: Boolean = false,
+    onRequestBalance: () -> Unit = {}
 ) {
     // A limit left over from an account re-typed from credit card to loan is ignored (#792).
     val isCreditCard = creditLimit != null && !isLoan
@@ -383,6 +416,29 @@ private fun CurrentBalanceCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            
+            // Request Balance button for supported bank accounts (not credit cards)
+            if (supportsBalanceRequest) {
+                Spacer(modifier = Modifier.height(Spacing.md))
+                OutlinedButton(
+                    onClick = onRequestBalance,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Phone,
+                        contentDescription = null,
+                        modifier = Modifier.size(Dimensions.Icon.small)
+                    )
+                    Spacer(modifier = Modifier.width(Spacing.sm))
+                    Text(
+                        text = stringResource(R.string.account_detail_request_balance),
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
             }
         }
     }
