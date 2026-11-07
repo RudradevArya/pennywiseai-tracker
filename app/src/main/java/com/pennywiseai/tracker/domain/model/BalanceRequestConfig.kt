@@ -36,10 +36,10 @@ object BalanceRequestConfig {
 
     /**
      * Returns true if the bank supports missed-call balance inquiry.
-     * Only bank accounts (not credit cards) are supported.
+     * Only bank accounts (not credit cards or loans) are supported.
      */
-    fun supportsBalanceRequest(bankName: String, isCreditCard: Boolean): Boolean =
-        !isCreditCard && balanceRequestNumbers.containsKey(bankName)
+    fun supportsBalanceRequest(bankName: String, isCreditCard: Boolean, isLoan: Boolean = false): Boolean =
+        !isCreditCard && !isLoan && balanceRequestNumbers.containsKey(bankName)
 
     /**
      * Returns all supported bank names for balance request.

@@ -109,9 +109,11 @@ fun AccountDetailScreen(
             item {
                 val context = LocalContext.current
                 val isCreditCard = uiState.currentBalance?.isCreditCard == true
+                val isLoan = uiState.currentBalance?.isLoan == true
                 val supportsBalanceRequest = BalanceRequestConfig.supportsBalanceRequest(
                     uiState.bankName,
-                    isCreditCard
+                    isCreditCard = isCreditCard,
+                    isLoan = isLoan
                 )
                 
                 CurrentBalanceCard(
