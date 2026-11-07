@@ -1,5 +1,6 @@
 package com.pennywiseai.parser.core.bank
 
+import com.pennywiseai.parser.core.ParsedTransaction
 import com.pennywiseai.parser.core.TransactionType
 import java.math.BigDecimal
 
@@ -27,6 +28,66 @@ class AxisBankParser : BaseIndianBankParser() {
                 normalizedSender == "AXISBK" ||
                 normalizedSender == "AXISBANK" ||
                 normalizedSender == "AXIS"
+    }
+
+    override fun parse(smsBody: String, sender: String, timestamp: Long): ParsedTransaction? {
+        if (isBalanceOnlyMessage(smsBody)) {
+            return parseBalanceOnly(smsBody, sender, timestamp)
+        }
+        return super.parse(smsBody, sender, timestamp)
+    }
+
+    /**
+     * Detects balance-only messages from missed-call banking.
+     * Format: "Bal for your Axis Bank A/c no. XX1111 - INR 999999"
+     * May include promotional links which should be ignored.
+     */
+    private fun isBalanceOnlyMessage(message: String): Boolean {
+        val lowerMessage = message.lowercase()
+        return (lowerMessage.contains("bal for your axis bank") ||
+                lowerMessage.contains("balance for your axis bank")) &&
+                lowerMessage.contains("a/c no")
+    }
+
+    /**
+     * Parses balance-only SMS from missed-call banking.
+     * Returns a BALANCE_UPDATE transaction with zero amount.
+     */
+    private fun parseBalanceOnly(message: String, sender: String, timestamp: Long): ParsedTransaction? {
+        // Pattern: "Bal for your Axis Bank A/c no. XX1111 - INR 999999" or variations
+        // Handles: "A/c no. XX1111", commas, decimals, whitespace variations
+        val balancePattern = Regex(
+            """(?:Bal|Balance)\s+for\s+your\s+Axis\s+Bank\s+A/c\s+no\.?\s*([X*x\d]+)\s*[-–:]\s*(?:INR|Rs\.?)\s*([0-9,]+(?:\.\d{1,2})?)""",
+            RegexOption.IGNORE_CASE
+        )
+
+        val match = balancePattern.find(message) ?: return null
+
+        val accountNumber = match.groupValues[1]
+        val balanceStr = match.groupValues[2].replace(",", "").replace(" ", "")
+
+        val balance = try {
+            BigDecimal(balanceStr)
+        } catch (e: NumberFormatException) {
+            return null
+        }
+
+        val accountLast4 = extractLast4Digits(accountNumber)
+
+        return ParsedTransaction(
+            amount = BigDecimal.ZERO,
+            type = TransactionType.BALANCE_UPDATE,
+            merchant = "Balance Inquiry",
+            reference = null,
+            accountLast4 = accountLast4,
+            balance = balance,
+            smsBody = message,
+            sender = sender,
+            timestamp = timestamp,
+            bankName = getBankName(),
+            isFromCard = false,
+            currency = "INR"
+        )
     }
 
     /**

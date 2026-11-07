@@ -1,5 +1,6 @@
 package com.pennywiseai.parser.core.bank
 
+import com.pennywiseai.parser.core.ParsedTransaction
 import com.pennywiseai.parser.core.TransactionType
 import java.math.BigDecimal
 
@@ -9,6 +10,7 @@ import java.math.BigDecimal
  * - UPI transactions with recipient details
  * - Standard debit/credit messages
  * - Card transactions
+ * - Balance-only SMS from missed-call banking
  */
 class KotakBankParser : BankParser() {
 
@@ -26,6 +28,70 @@ class KotakBankParser : BankParser() {
         // "Kotak Mahindra Bank", "Kotak811") instead of the DLT header, so match
         // any sender that contains the brand token.
         return normalizedSender.contains("KOTAK")
+    }
+
+    override fun parse(smsBody: String, sender: String, timestamp: Long): ParsedTransaction? {
+        // Check for balance-only messages first (from missed-call banking)
+        if (isBalanceOnlyMessage(smsBody)) {
+            return parseBalanceOnly(smsBody, sender, timestamp)
+        }
+        return super.parse(smsBody, sender, timestamp)
+    }
+
+    /**
+     * Detects balance-only messages from missed-call banking.
+     * Format: "Dear Customer, available Balance in A/C : xx5555 is INR : 66666 . Kotak Bank"
+     */
+    private fun isBalanceOnlyMessage(message: String): Boolean {
+        val lowerMessage = message.lowercase()
+        return lowerMessage.contains("available balance in a/c") &&
+                lowerMessage.contains("kotak") &&
+                !lowerMessage.contains("sent") &&
+                !lowerMessage.contains("debited") &&
+                !lowerMessage.contains("credited") &&
+                !lowerMessage.contains("withdrawn") &&
+                !lowerMessage.contains("spent") &&
+                !lowerMessage.contains("received")
+    }
+
+    /**
+     * Parses balance-only SMS from missed-call banking.
+     * Returns a BALANCE_UPDATE transaction with zero amount.
+     */
+    private fun parseBalanceOnly(message: String, sender: String, timestamp: Long): ParsedTransaction? {
+        // Pattern: "available Balance in A/C : xx5555 is INR : 66666" with optional spaces and punctuation
+        val balancePattern = Regex(
+            """available\s+Balance\s+in\s+A/C\s*:\s*([X*x\d]+)\s+is\s+(?:INR|Rs\.?)\s*:?\s*([0-9,]+(?:\.\d{1,2})?)""",
+            RegexOption.IGNORE_CASE
+        )
+
+        val match = balancePattern.find(message) ?: return null
+
+        val accountNumber = match.groupValues[1]
+        val balanceStr = match.groupValues[2].replace(",", "").replace(" ", "")
+
+        val balance = try {
+            BigDecimal(balanceStr)
+        } catch (e: NumberFormatException) {
+            return null
+        }
+
+        val accountLast4 = extractLast4Digits(accountNumber)
+
+        return ParsedTransaction(
+            amount = BigDecimal.ZERO,
+            type = TransactionType.BALANCE_UPDATE,
+            merchant = "Balance Inquiry",
+            reference = null,
+            accountLast4 = accountLast4,
+            balance = balance,
+            smsBody = message,
+            sender = sender,
+            timestamp = timestamp,
+            bankName = getBankName(),
+            isFromCard = false,
+            currency = "INR"
+        )
     }
 
     override fun extractMerchant(message: String, sender: String): String? {
